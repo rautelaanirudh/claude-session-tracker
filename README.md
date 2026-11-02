@@ -87,6 +87,7 @@ Markers: `●` open now · `↯` cut off · `~` probably cut off (from before tr
 
 Everything stays on your machine. The plugin makes no network requests and sends nothing anywhere. It only
 reads Claude Code's local transcripts and writes its own small records under `~/.claude/session-tracker/`.
+Full details: [Privacy policy](PRIVACY.md).
 
 ## License
 
