@@ -26,6 +26,13 @@ def claude_pid():
     return None
 
 
+def is_headless(pid):
+    """claude -p / --print runs end with reason 'other'; they are never worth resuming."""
+    args = subprocess.run(["ps", "-o", "args=", "-p", str(pid)],
+                          stdout=subprocess.PIPE, universal_newlines=True).stdout.split()
+    return "-p" in args or "--print" in args
+
+
 def prune():
     cutoff = time.time() - KEEP_DAYS * 86400
     for f in STATE.glob("*.json"):
@@ -43,11 +50,14 @@ def main():
     name = event.get("hook_event_name")
 
     if name == "SessionStart":
+        pid = claude_pid()
+        if pid and is_headless(pid):
+            return
         record = {
             "session_id": sid,
             "cwd": event.get("cwd") or os.getcwd(),
             "transcript_path": event.get("transcript_path"),
-            "pid": claude_pid(),
+            "pid": pid,
             "started": time.time(),
             "source": event.get("source"),
         }
