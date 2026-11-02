@@ -98,6 +98,8 @@ def read_session(path):
                     continue
                 if not isinstance(entry, dict):
                     continue
+                if str(entry.get("entrypoint", "")).startswith("sdk"):
+                    return None  # claude -p / Agent SDK run: not a session anyone resumes
                 kind = entry.get("type")
                 if kind in TITLE_KEYS and isinstance(entry.get(TITLE_KEYS[kind]), str):
                     titles[kind] = entry[TITLE_KEYS[kind]]
