@@ -42,7 +42,7 @@ Tracking starts with the next session you open. Optional: to use the `cc-session
 terminal as well, link it onto your PATH:
 
 ```bash
-ln -s ~/.claude/plugins/marketplaces/claude-session-tracker/bin/cc-sessions ~/.local/bin/cc-sessions
+ln -s ~/.claude/plugins/marketplaces/claude-session-tracker/scripts/cc-sessions ~/.local/bin/cc-sessions
 ```
 
 ## Use

@@ -1,7 +1,7 @@
 {
   "name": "session-tracker",
   "description": "Records which Claude Code sessions are open, so after a reboot, crash or closed terminal you can see exactly which ones were cut off and reopen them all, from any directory. macOS and Linux.",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "keywords": [
     "sessions",
     "resume",

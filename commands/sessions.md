@@ -1,12 +1,12 @@
 ---
 description: List recent Claude Code sessions from every project, marking the ones a reboot or crash cut off
 argument-hint: "[filter words]"
-allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/bin/cc-sessions --list -n 40)
+allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/cc-sessions --list -n 40)
 ---
 
 Sessions across every project, newest first (● open now, ↯ cut off by a reboot/crash/closed terminal, ~ probably cut off):
 
-!`${CLAUDE_PLUGIN_ROOT}/bin/cc-sessions --list -n 40`
+!`${CLAUDE_PLUGIN_ROOT}/scripts/cc-sessions --list -n 40`
 
 Each session is printed as: number, marker (blank when none), title; then folder, age and session id (after the `·`); then the last message.
 
