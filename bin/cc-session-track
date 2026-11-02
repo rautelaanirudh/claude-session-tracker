@@ -1,0 +1,67 @@
+#!/usr/bin/python3
+"""SessionStart / SessionEnd hook: keep one record per session in ~/.claude/session-tracker/.
+
+A record with no clean end, whose claude process is gone, is a session that a
+reboot, crash or closed terminal cut off. cc-sessions reads these records.
+"""
+import json, os, subprocess, sys, time
+from pathlib import Path
+
+STATE = Path.home() / ".claude" / "session-tracker"
+KEEP_DAYS = 14
+
+
+def claude_pid():
+    """Walk up from this hook to the claude process that ran it."""
+    pid = os.getppid()
+    for _ in range(6):
+        out = subprocess.run(["ps", "-o", "ppid=,comm=", "-p", str(pid)],
+                             stdout=subprocess.PIPE, universal_newlines=True).stdout.strip()
+        if not out:
+            return None
+        ppid, comm = out.split(None, 1)
+        if os.path.basename(comm) == "claude":
+            return pid
+        pid = int(ppid)
+    return None
+
+
+def prune():
+    cutoff = time.time() - KEEP_DAYS * 86400
+    for f in STATE.glob("*.json"):
+        if f.stat().st_mtime < cutoff:
+            f.unlink()
+
+
+def main():
+    event = json.load(sys.stdin)
+    sid = event.get("session_id")
+    if not sid:
+        return
+    STATE.mkdir(parents=True, exist_ok=True)
+    path = STATE / f"{sid}.json"
+    name = event.get("hook_event_name")
+
+    if name == "SessionStart":
+        record = {
+            "session_id": sid,
+            "cwd": event.get("cwd") or os.getcwd(),
+            "transcript_path": event.get("transcript_path"),
+            "pid": claude_pid(),
+            "started": time.time(),
+            "source": event.get("source"),
+        }
+        path.write_text(json.dumps(record))
+        prune()
+    elif name == "SessionEnd" and path.exists():
+        record = json.loads(path.read_text())
+        record["ended"] = time.time()
+        record["end_reason"] = event.get("reason")
+        path.write_text(json.dumps(record))
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as exc:  # never break a session over bookkeeping
+        print(f"session-tracker: {exc}", file=sys.stderr)

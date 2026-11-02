@@ -1,0 +1,199 @@
+#!/usr/bin/python3
+"""List Claude Code sessions from every project, newest first, and resume one.
+
+  cc-sessions              recent 25 sessions, pick one to resume
+  cc-sessions stargate     only sessions whose title/project/prompt match
+  cc-sessions --cut        only sessions a reboot, crash or closed terminal cut off
+  cc-sessions --restore    reopen every cut-off session in its own terminal tab
+  cc-sessions -n 60        show more
+
+  ● open now    ↯ cut off (never exited cleanly)    ~ probably cut off (before tracking, by time)
+"""
+import argparse, json, os, re, shlex, subprocess, sys, time
+from pathlib import Path
+
+PROJECTS = Path.home() / ".claude" / "projects"
+STATE = Path.home() / ".claude" / "session-tracker"
+CLEAN_ENDS = {"clear", "logout", "prompt_input_exit", "resume", "bypass_permissions_disabled"}
+TITLE_KEYS = {"custom-title": "customTitle", "agent-name": "agentName", "ai-title": "aiTitle"}
+TITLE_RANK = ["custom-title", "agent-name", "ai-title"]
+COLOR = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
+DIM, BOLD, YEL, GRN, CYN, RST = (("\033[2m", "\033[1m", "\033[33m", "\033[32m", "\033[36m", "\033[0m")
+                                  if COLOR else ("",) * 6)
+
+
+def boot_time():
+    out = subprocess.run(["sysctl", "-n", "kern.boottime"], stdout=subprocess.PIPE,
+                         universal_newlines=True).stdout
+    m = re.search(r"sec = (\d+)", out)
+    return int(m.group(1)) if m else 0
+
+
+def pid_alive(pid):
+    if not pid:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def tracked_status(booted):
+    """session id -> 'open' | 'cut' | 'closed', from the hook's records."""
+    status = {}
+    for f in STATE.glob("*.json"):
+        try:
+            rec = json.loads(f.read_text())
+        except ValueError:
+            continue
+        if rec.get("end_reason") in CLEAN_ENDS:
+            status[rec["session_id"]] = "closed"
+        elif rec.get("started", 0) >= booted and pid_alive(rec.get("pid")) and not rec.get("ended"):
+            status[rec["session_id"]] = "open"
+        else:
+            status[rec["session_id"]] = "cut"
+    return status
+
+
+def prompt_text(entry):
+    content = (entry.get("message") or {}).get("content")
+    if isinstance(content, list):
+        content = " ".join(c.get("text", "") for c in content if isinstance(c, dict) and c.get("type") == "text")
+    if not isinstance(content, str):
+        return None
+    text = " ".join(content.split())
+    if not text or text.startswith("<") or text.startswith("Caveat:"):
+        return None
+    return text
+
+
+def read_session(path):
+    titles, cwd, first, last = {}, None, None, None
+    with open(path, errors="replace") as fh:
+        for line in fh:
+            if cwd and '"type":"user"' not in line and "title" not in line and '"agent-name"' not in line:
+                continue
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            kind = entry.get("type")
+            if kind in TITLE_KEYS and entry.get(TITLE_KEYS[kind]):
+                titles[kind] = entry[TITLE_KEYS[kind]]
+            cwd = cwd or entry.get("cwd")
+            if kind == "user" and not entry.get("isSidechain") and not entry.get("isMeta"):
+                text = prompt_text(entry)
+                if text:
+                    first = first or text
+                    last = text
+    if not first:
+        return None
+    title = next((titles[k] for k in TITLE_RANK if titles.get(k) and titles[k] != "New session"), first)
+    return {"id": path.stem, "cwd": cwd or "?", "title": title, "last": last, "mtime": path.stat().st_mtime}
+
+
+def ago(ts):
+    s = int(time.time() - ts)
+    for unit, n in (("d", 86400), ("h", 3600), ("m", 60)):
+        if s >= n:
+            return f"{s // n}{unit} ago"
+    return "now"
+
+
+def marker(s, status, booted):
+    st = status.get(s["id"])
+    if st == "open":
+        return f"{GRN}●{RST}"
+    if st == "cut":
+        return f"{YEL}↯{RST}"
+    if st is None and s["mtime"] < booted and booted - s["mtime"] < 12 * 3600:
+        return f"{YEL}~{RST}"
+    return " "
+
+
+def resume_command(s):
+    return f"cd {shlex.quote(s['cwd'])} && claude --resume {s['id']}"
+
+
+def open_in_tab(command):
+    """Run command in a new tab of the terminal app this was started from."""
+    if os.environ.get("TERM_PROGRAM") == "iTerm.app":
+        script = (
+            'tell application "iTerm2"\n'
+            '  if (count of windows) = 0 then create window with default profile\n'
+            '  tell current window to create tab with default profile\n'
+            f'  tell current session of current window to write text {json.dumps(command)}\n'
+            'end tell')
+    else:
+        script = f'tell application "Terminal" to do script {json.dumps(command)}'
+    subprocess.run(["osascript", "-e", script], check=True, stdout=subprocess.DEVNULL)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("query", nargs="*", help="filter words (all must match)")
+    ap.add_argument("-n", type=int, default=25, help="how many to show (default 25)")
+    ap.add_argument("--cut", action="store_true", help="only sessions that were cut off")
+    ap.add_argument("--restore", action="store_true", help="reopen every cut-off session in a new tab")
+    ap.add_argument("--list", action="store_true", help="print and exit, no prompt")
+    args = ap.parse_args()
+
+    booted = boot_time()
+    status = tracked_status(booted)
+    files = sorted(PROJECTS.glob("*/*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if args.cut or args.restore:
+        files = [f for f in files if status.get(f.stem) == "cut"]
+    words = [w.lower() for w in args.query]
+
+    sessions = []
+    for f in files:
+        s = read_session(f)
+        if not s:
+            continue
+        if all(w in f"{s['title']} {s['cwd']} {s['last']}".lower() for w in words):
+            sessions.append(s)
+        if len(sessions) >= args.n:
+            break
+    if not sessions:
+        sys.exit("no cut-off sessions" if args.cut or args.restore else "no matching sessions")
+
+    home = str(Path.home())
+    for i, s in enumerate(sessions, 1):
+        print(f"{BOLD}{i:>3}{RST} {marker(s, status, booted)} {s['title'][:70]}")
+        print(f"      {CYN}{s['cwd'].replace(home, '~')}{RST}  {DIM}{ago(s['mtime'])} · {s['id']}{RST}")
+        if s["last"] and s["last"] != s["title"]:
+            print(f"      {DIM}last: {s['last'][:90]}{RST}")
+    print(f"\n{GRN}●{RST} open now   {YEL}↯{RST} cut off   {YEL}~{RST} probably cut off (before tracking)")
+    if args.list:
+        return
+
+    if args.restore:
+        try:
+            ok = input(f"\nreopen these {len(sessions)} sessions in new tabs? [y/N] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return
+        if ok == "y":
+            for s in sessions:
+                open_in_tab(resume_command(s))
+        return
+
+    try:
+        pick = input("\nresume # (enter to quit): ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return
+    if not pick.isdigit() or not 1 <= int(pick) <= len(sessions):
+        return
+    s = sessions[int(pick) - 1]
+    if status.get(s["id"]) == "open":
+        print(f"{YEL}note:{RST} this session is still open in another terminal")
+    if os.path.isdir(s["cwd"]):
+        os.chdir(s["cwd"])
+    print(f"{DIM}{resume_command(s)}{RST}")
+    os.execvp("claude", ["claude", "--resume", s["id"]])
+
+
+if __name__ == "__main__":
+    main()
