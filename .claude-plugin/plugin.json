@@ -1,6 +1,6 @@
 {
   "name": "session-tracker",
   "description": "Records which Claude Code sessions are open, so you can find and resume the ones a reboot or crash cut off, from any directory.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "keywords": ["sessions", "resume", "restore", "reboot"]
 }
