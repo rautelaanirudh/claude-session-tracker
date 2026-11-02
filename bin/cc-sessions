@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 """List Claude Code sessions from every project, newest first, and resume one.
 
   cc-sessions              recent 25 sessions, pick one to resume
@@ -12,8 +12,10 @@
 import argparse, json, os, re, shlex, subprocess, sys, time
 from pathlib import Path
 
-PROJECTS = Path.home() / ".claude" / "projects"
-STATE = Path.home() / ".claude" / "session-tracker"
+CONFIG = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+PROJECTS = CONFIG / "projects"
+STATE = CONFIG / "session-tracker"
+SESSION_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 CLEAN_ENDS = {"clear", "logout", "prompt_input_exit", "resume", "bypass_permissions_disabled"}
 TITLE_KEYS = {"custom-title": "customTitle", "agent-name": "agentName", "ai-title": "aiTitle"}
 TITLE_RANK = ["custom-title", "agent-name", "ai-title"]
@@ -23,14 +25,23 @@ DIM, BOLD, YEL, GRN, CYN, RST = (("\033[2m", "\033[1m", "\033[33m", "\033[32m", 
 
 
 def boot_time():
-    out = subprocess.run(["sysctl", "-n", "kern.boottime"], stdout=subprocess.PIPE,
-                         universal_newlines=True).stdout
-    m = re.search(r"sec = (\d+)", out)
-    return int(m.group(1)) if m else 0
+    """Seconds since the epoch at last boot, or 0 if unknown."""
+    try:
+        if sys.platform == "darwin":
+            out = subprocess.run(["sysctl", "-n", "kern.boottime"], stdout=subprocess.PIPE,
+                                 universal_newlines=True).stdout
+            m = re.search(r"sec = (\d+)", out)
+            return int(m.group(1)) if m else 0
+        for line in Path("/proc/stat").read_text().splitlines():
+            if line.startswith("btime "):
+                return int(line.split()[1])
+    except (OSError, ValueError):
+        pass
+    return 0
 
 
 def pid_alive(pid):
-    if not pid:
+    if not isinstance(pid, int) or pid <= 0:
         return False
     try:
         os.kill(pid, 0)
@@ -47,14 +58,17 @@ def tracked_status(booted):
     for f in STATE.glob("*.json"):
         try:
             rec = json.loads(f.read_text())
-        except ValueError:
+        except (OSError, ValueError):
+            continue
+        sid = rec.get("session_id")
+        if not isinstance(sid, str):
             continue
         if rec.get("end_reason") in CLEAN_ENDS:
-            status[rec["session_id"]] = "closed"
+            status[sid] = "closed"
         elif rec.get("started", 0) >= booted and pid_alive(rec.get("pid")) and not rec.get("ended"):
-            status[rec["session_id"]] = "open"
+            status[sid] = "open"
         else:
-            status[rec["session_id"]] = "cut"
+            status[sid] = "cut"
     return status
 
 
@@ -65,34 +79,42 @@ def prompt_text(entry):
     if not isinstance(content, str):
         return None
     text = " ".join(content.split())
-    if not text or text.startswith("<") or text.startswith("Caveat:"):
+    if not text or text.startswith(("<", "Caveat:", "This session is being continued from a previous conversation")):
         return None
     return text
 
 
 def read_session(path):
+    """Best effort: the transcript format is internal to Claude Code and can change."""
     titles, cwd, first, last = {}, None, None, None
-    with open(path, errors="replace") as fh:
-        for line in fh:
-            if cwd and '"type":"user"' not in line and "title" not in line and '"agent-name"' not in line:
-                continue
-            try:
-                entry = json.loads(line)
-            except ValueError:
-                continue
-            kind = entry.get("type")
-            if kind in TITLE_KEYS and entry.get(TITLE_KEYS[kind]):
-                titles[kind] = entry[TITLE_KEYS[kind]]
-            cwd = cwd or entry.get("cwd")
-            if kind == "user" and not entry.get("isSidechain") and not entry.get("isMeta"):
-                text = prompt_text(entry)
-                if text:
-                    first = first or text
-                    last = text
+    try:
+        with open(path, errors="replace") as fh:
+            for line in fh:
+                if cwd and '"type":"user"' not in line and "title" not in line and '"agent-name"' not in line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(entry, dict):
+                    continue
+                kind = entry.get("type")
+                if kind in TITLE_KEYS and isinstance(entry.get(TITLE_KEYS[kind]), str):
+                    titles[kind] = entry[TITLE_KEYS[kind]]
+                if isinstance(entry.get("cwd"), str):
+                    cwd = cwd or entry["cwd"]
+                if kind == "user" and not entry.get("isSidechain") and not entry.get("isMeta"):
+                    text = prompt_text(entry)
+                    if text:
+                        first = first or text
+                        last = text
+        mtime = path.stat().st_mtime
+    except OSError:
+        return None
     if not first:
         return None
     title = next((titles[k] for k in TITLE_RANK if titles.get(k) and titles[k] != "New session"), first)
-    return {"id": path.stem, "cwd": cwd or "?", "title": title, "last": last, "mtime": path.stat().st_mtime}
+    return {"id": path.stem, "cwd": cwd or "", "title": title, "last": last, "mtime": mtime}
 
 
 def ago(ts):
@@ -109,45 +131,54 @@ def marker(s, status, booted):
         return f"{GRN}●{RST}"
     if st == "cut":
         return f"{YEL}↯{RST}"
-    if st is None and s["mtime"] < booted and booted - s["mtime"] < 12 * 3600:
+    if st is None and booted and s["mtime"] < booted and booted - s["mtime"] < 12 * 3600:
         return f"{YEL}~{RST}"
     return " "
 
 
 def resume_command(s):
-    return f"cd {shlex.quote(s['cwd'])} && claude --resume {s['id']}"
+    resume = f"claude --resume {s['id']}"
+    return f"cd {shlex.quote(s['cwd'])} && {resume}" if s["cwd"] else resume
 
 
-def open_in_tab(command):
-    """Run command in a new tab of the terminal app this was started from."""
-    if os.environ.get("TERM_PROGRAM") == "iTerm.app":
-        script = (
-            'tell application "iTerm2"\n'
-            '  if (count of windows) = 0 then create window with default profile\n'
-            '  tell current window to create tab with default profile\n'
-            f'  tell current session of current window to write text {json.dumps(command)}\n'
-            'end tell')
+# AppleScript receives the command as an argument (argv), never spliced into the script text.
+ITERM_SCRIPT = """on run argv
+  tell application "iTerm2"
+    if (count of windows) = 0 then create window with default profile
+    tell current window to create tab with default profile
+    tell current session of current window to write text (item 1 of argv)
+  end tell
+end run"""
+TERMINAL_SCRIPT = """on run argv
+  tell application "Terminal" to do script (item 1 of argv)
+end run"""
+
+
+def restore_target():
+    """Where --restore can open new tabs: 'tmux', 'iterm', 'terminal', or None."""
+    if os.environ.get("TMUX"):
+        return "tmux"
+    if sys.platform == "darwin":
+        return "iterm" if os.environ.get("TERM_PROGRAM") == "iTerm.app" else "terminal"
+    return None
+
+
+def open_in_tab(s, target):
+    if target == "tmux":
+        argv = ["tmux", "new-window", "-n", s["title"][:24], "claude", "--resume", s["id"]]
+        if s["cwd"] and os.path.isdir(s["cwd"]):
+            argv[2:2] = ["-c", s["cwd"]]
     else:
-        script = f'tell application "Terminal" to do script {json.dumps(command)}'
-    subprocess.run(["osascript", "-e", script], check=True, stdout=subprocess.DEVNULL)
+        argv = ["osascript", "-e", ITERM_SCRIPT if target == "iterm" else TERMINAL_SCRIPT, resume_command(s)]
+    subprocess.run(argv, check=True, stdout=subprocess.DEVNULL)
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("query", nargs="*", help="filter words (all must match)")
-    ap.add_argument("-n", type=int, default=25, help="how many to show (default 25)")
-    ap.add_argument("--cut", action="store_true", help="only sessions that were cut off")
-    ap.add_argument("--restore", action="store_true", help="reopen every cut-off session in a new tab")
-    ap.add_argument("--list", action="store_true", help="print and exit, no prompt")
-    args = ap.parse_args()
-
-    booted = boot_time()
-    status = tracked_status(booted)
+def collect(args, status):
     files = sorted(PROJECTS.glob("*/*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+    files = [f for f in files if SESSION_ID.match(f.stem)]
     if args.cut or args.restore:
         files = [f for f in files if status.get(f.stem) == "cut"]
     words = [w.lower() for w in args.query]
-
     sessions = []
     for f in files:
         s = read_session(f)
@@ -157,27 +188,60 @@ def main():
             sessions.append(s)
         if len(sessions) >= args.n:
             break
-    if not sessions:
-        sys.exit("no cut-off sessions" if args.cut or args.restore else "no matching sessions")
+    return sessions
 
+
+def print_sessions(sessions, status, booted):
     home = str(Path.home())
     for i, s in enumerate(sessions, 1):
         print(f"{BOLD}{i:>3}{RST} {marker(s, status, booted)} {s['title'][:70]}")
-        print(f"      {CYN}{s['cwd'].replace(home, '~')}{RST}  {DIM}{ago(s['mtime'])} · {s['id']}{RST}")
+        print(f"      {CYN}{(s['cwd'] or '?').replace(home, '~')}{RST}  {DIM}{ago(s['mtime'])} · {s['id']}{RST}")
         if s["last"] and s["last"] != s["title"]:
             print(f"      {DIM}last: {s['last'][:90]}{RST}")
     print(f"\n{GRN}●{RST} open now   {YEL}↯{RST} cut off   {YEL}~{RST} probably cut off (before tracking)")
-    if args.list:
-        return
 
-    if args.restore:
+
+def restore(sessions, assume_yes):
+    target = restore_target()
+    if target is None:
+        print("\nCan't open tabs here (needs macOS or tmux). Run these yourself:")
+        for s in sessions:
+            print(f"  {resume_command(s)}")
+        return
+    if not assume_yes:
         try:
             ok = input(f"\nreopen these {len(sessions)} sessions in new tabs? [y/N] ").strip().lower()
         except (EOFError, KeyboardInterrupt):
             return
-        if ok == "y":
-            for s in sessions:
-                open_in_tab(resume_command(s))
+        if ok != "y":
+            return
+    for s in sessions:
+        open_in_tab(s, target)
+    print(f"opened {len(sessions)} session(s) via {target}")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("query", nargs="*", help="filter words (all must match)")
+    ap.add_argument("-n", type=int, default=25, help="how many to show (default 25)")
+    ap.add_argument("--cut", action="store_true", help="only sessions that were cut off")
+    ap.add_argument("--restore", action="store_true", help="reopen every cut-off session in a new tab")
+    ap.add_argument("--yes", action="store_true", help="with --restore: don't ask before opening tabs")
+    ap.add_argument("--list", action="store_true", help="print and exit, no prompt")
+    args = ap.parse_args()
+
+    booted = boot_time()
+    status = tracked_status(booted)
+    sessions = collect(args, status)
+    if not sessions:
+        print("no cut-off sessions" if args.cut or args.restore else "no matching sessions")
+        sys.exit(0 if args.cut or args.restore else 1)
+
+    print_sessions(sessions, status, booted)
+    if args.list:
+        return
+    if args.restore:
+        restore(sessions, args.yes)
         return
 
     try:
@@ -189,7 +253,7 @@ def main():
     s = sessions[int(pick) - 1]
     if status.get(s["id"]) == "open":
         print(f"{YEL}note:{RST} this session is still open in another terminal")
-    if os.path.isdir(s["cwd"]):
+    if s["cwd"] and os.path.isdir(s["cwd"]):
         os.chdir(s["cwd"])
     print(f"{DIM}{resume_command(s)}{RST}")
     os.execvp("claude", ["claude", "--resume", s["id"]])

@@ -1,36 +1,42 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 """SessionStart / SessionEnd hook: keep one record per session in ~/.claude/session-tracker/.
 
 A record with no clean end, whose claude process is gone, is a session that a
 reboot, crash or closed terminal cut off. cc-sessions reads these records.
+Runs on macOS and Linux; does nothing elsewhere. Never fails the session.
 """
-import json, os, subprocess, sys, time
+import json, os, re, subprocess, sys, time
 from pathlib import Path
 
-STATE = Path.home() / ".claude" / "session-tracker"
+CONFIG = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+STATE = CONFIG / "session-tracker"
+SESSION_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 KEEP_DAYS = 14
 
 
-def claude_pid():
-    """Walk up from this hook to the claude process that ran it."""
+def process_info(pid):
+    """(parent pid, argv) of a process, or None."""
+    out = subprocess.run(["ps", "-o", "ppid=", "-o", "args=", "-p", str(pid)],
+                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                         universal_newlines=True).stdout.strip()
+    if not out:
+        return None
+    ppid, _, args = out.partition(" ")
+    return int(ppid), args.split()
+
+
+def claude_process():
+    """Walk up from this hook to the claude process that ran it: (pid, argv) or (None, [])."""
     pid = os.getppid()
     for _ in range(6):
-        out = subprocess.run(["ps", "-o", "ppid=,comm=", "-p", str(pid)],
-                             stdout=subprocess.PIPE, universal_newlines=True).stdout.strip()
-        if not out:
-            return None
-        ppid, comm = out.split(None, 1)
-        if os.path.basename(comm) == "claude":
-            return pid
-        pid = int(ppid)
-    return None
-
-
-def is_headless(pid):
-    """claude -p / --print runs end with reason 'other'; they are never worth resuming."""
-    args = subprocess.run(["ps", "-o", "args=", "-p", str(pid)],
-                          stdout=subprocess.PIPE, universal_newlines=True).stdout.split()
-    return "-p" in args or "--print" in args
+        info = process_info(pid)
+        if not info:
+            break
+        ppid, argv = info
+        if argv and os.path.basename(argv[0]) == "claude":
+            return pid, argv
+        pid = ppid
+    return None, []
 
 
 def prune():
@@ -40,34 +46,44 @@ def prune():
             f.unlink()
 
 
+def on_start(event, path):
+    pid, argv = claude_process()
+    if "-p" in argv or "--print" in argv:  # headless runs end with reason 'other'; never worth resuming
+        return
+    record = {
+        "session_id": event["session_id"],
+        "cwd": event.get("cwd") or os.getcwd(),
+        "pid": pid,
+        "started": time.time(),
+        "source": event.get("source"),
+    }
+    path.write_text(json.dumps(record))
+    prune()
+
+
+def on_end(event, path):
+    if not path.exists():
+        return
+    record = json.loads(path.read_text())
+    record["ended"] = time.time()
+    record["end_reason"] = event.get("reason")
+    path.write_text(json.dumps(record))
+
+
 def main():
+    if sys.platform not in ("darwin", "linux"):
+        return
     event = json.load(sys.stdin)
     sid = event.get("session_id")
-    if not sid:
+    if not isinstance(sid, str) or not SESSION_ID.match(sid):
         return
     STATE.mkdir(parents=True, exist_ok=True)
     path = STATE / f"{sid}.json"
     name = event.get("hook_event_name")
-
     if name == "SessionStart":
-        pid = claude_pid()
-        if pid and is_headless(pid):
-            return
-        record = {
-            "session_id": sid,
-            "cwd": event.get("cwd") or os.getcwd(),
-            "transcript_path": event.get("transcript_path"),
-            "pid": pid,
-            "started": time.time(),
-            "source": event.get("source"),
-        }
-        path.write_text(json.dumps(record))
-        prune()
-    elif name == "SessionEnd" and path.exists():
-        record = json.loads(path.read_text())
-        record["ended"] = time.time()
-        record["end_reason"] = event.get("reason")
-        path.write_text(json.dumps(record))
+        on_start(event, path)
+    elif name == "SessionEnd":
+        on_end(event, path)
 
 
 if __name__ == "__main__":

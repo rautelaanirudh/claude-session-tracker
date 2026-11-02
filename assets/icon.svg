@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2B2F3A"/><stop offset="1" stop-color="#14161C"/>
+    </linearGradient>
+    <marker id="head" viewBox="0 0 10 10" refX="4" refY="5" markerWidth="2.3" markerHeight="2.3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L10,5 L0,10 z" fill="#E8875A"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="1024" height="1024" rx="224" fill="url(#bg)"/>
+  <!-- terminal window -->
+  <rect x="184" y="236" width="656" height="552" rx="64" fill="#1E2129" stroke="#3A3F4D" stroke-width="12"/>
+  <circle cx="256" cy="306" r="18" fill="#E5534B"/><circle cx="314" cy="306" r="18" fill="#E0A63A"/><circle cx="372" cy="306" r="18" fill="#3FB27F"/>
+  <!-- circular restore arrow -->
+  <path d="M 640 580 A 150 150 0 1 1 588 432" fill="none" stroke="#E8875A" stroke-width="44" stroke-linecap="round" marker-end="url(#head)"/>
+  <!-- prompt chevron inside the arrow -->
+  <polyline points="462,520 512,566 462,612" fill="none" stroke="#F2F2F2" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
+</svg></body></html>

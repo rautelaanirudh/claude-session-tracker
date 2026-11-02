@@ -1,17 +1,21 @@
 {
   "name": "session-tracker",
-  "description": "Records which Claude Code sessions are open, so you can find and resume the ones a reboot or crash cut off, from any directory.",
-  "version": "0.1.1",
+  "description": "Records which Claude Code sessions are open, so after a reboot, crash or closed terminal you can see exactly which ones were cut off and reopen them all, from any directory. macOS and Linux.",
+  "version": "0.2.0",
   "keywords": [
     "sessions",
     "resume",
     "restore",
-    "reboot"
+    "reboot",
+    "crash",
+    "iterm2",
+    "tmux"
   ],
   "author": {
     "name": "Anirudh Rautela"
   },
   "repository": "https://github.com/rautelaanirudh/claude-session-tracker",
   "license": "MIT",
-  "homepage": "https://github.com/rautelaanirudh/claude-session-tracker"
+  "homepage": "https://github.com/rautelaanirudh/claude-session-tracker",
+  "icon": ".claude-plugin/icon.png"
 }
