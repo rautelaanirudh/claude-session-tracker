@@ -7,8 +7,17 @@ when it starts and how it ends. Sessions that never ended cleanly are marked "cu
 
 ## Install
 
+In Claude Code:
+
+```
+/plugin marketplace add rautelaanirudh/claude-session-tracker
+/plugin install session-tracker@session-tracker-dev
+```
+
+Or from a shell:
+
 ```bash
-claude plugin marketplace add git@source.golabs.io:anirudh.rautela/claude-session-tracker.git
+claude plugin marketplace add rautelaanirudh/claude-session-tracker
 claude plugin install session-tracker@session-tracker-dev
 ```
 

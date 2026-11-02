@@ -11,6 +11,7 @@
   "author": {
     "name": "Anirudh Rautela"
   },
-  "repository": "https://source.golabs.io/anirudh.rautela/claude-session-tracker",
-  "license": "MIT"
+  "repository": "https://github.com/rautelaanirudh/claude-session-tracker",
+  "license": "MIT",
+  "homepage": "https://github.com/rautelaanirudh/claude-session-tracker"
 }
