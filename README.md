@@ -8,14 +8,14 @@ when it starts and how it ends. Sessions that never ended cleanly are marked "cu
 ## Install
 
 ```bash
-claude plugin marketplace add <path-or-git-url-of-this-repo>
+claude plugin marketplace add git@source.golabs.io:anirudh.rautela/claude-session-tracker.git
 claude plugin install session-tracker@session-tracker-dev
 ```
 
 For the terminal picker, put `bin/cc-sessions` on your PATH, for example:
 
 ```bash
-ln -s "$PWD/bin/cc-sessions" ~/.local/bin/cc-sessions
+ln -s ~/.claude/plugins/marketplaces/session-tracker-dev/bin/cc-sessions ~/.local/bin/cc-sessions
 ```
 
 ## Use

@@ -2,5 +2,14 @@
   "name": "session-tracker",
   "description": "Records which Claude Code sessions are open, so you can find and resume the ones a reboot or crash cut off, from any directory.",
   "version": "0.1.1",
-  "keywords": ["sessions", "resume", "restore", "reboot"]
+  "keywords": [
+    "sessions",
+    "resume",
+    "restore",
+    "reboot"
+  ],
+  "author": {
+    "name": "Anirudh Rautela"
+  },
+  "repository": "https://source.golabs.io/anirudh.rautela/claude-session-tracker"
 }
